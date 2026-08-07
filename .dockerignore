@@ -1,0 +1,11 @@
+.git
+.gradle
+.idea
+build
+uploads
+recovery
+*.iml
+*.log
+docs
+test-reference
+src/test

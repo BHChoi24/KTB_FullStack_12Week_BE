@@ -1,0 +1,423 @@
+package kr.adapterz.Artifact.service;
+
+import kr.adapterz.Artifact.dto.user.PasswordUpdateRequestDto;
+import kr.adapterz.Artifact.dto.user.UserProfileUpdateRequestDto;
+import kr.adapterz.Artifact.dto.user.UserSignupRequestDto;
+import kr.adapterz.Artifact.entity.User;
+import kr.adapterz.Artifact.exception.AuthenticationException;
+import kr.adapterz.Artifact.exception.InvalidInputException;
+import kr.adapterz.Artifact.exception.NotFoundException;
+import kr.adapterz.Artifact.repository.UserRepository;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+
+import static kr.adapterz.Artifact.response.code.ErrorCode.EMAIL_PASSWORD_CHECK;
+import static kr.adapterz.Artifact.response.code.ErrorCode.UNAUTHORIZED;
+import static kr.adapterz.Artifact.response.code.ErrorCode.USER_NOT_FOUND;
+import static kr.adapterz.Artifact.response.code.ValidationField.EMAIL;
+import static kr.adapterz.Artifact.response.code.ValidationField.NICKNAME;
+import static kr.adapterz.Artifact.response.code.ValidationField.PASSWORD_CHECK;
+import static kr.adapterz.Artifact.response.code.ValidationMessage.EMAIL_DUPLICATE;
+import static kr.adapterz.Artifact.response.code.ValidationMessage.NICKNAME_DUPLICATE;
+import static kr.adapterz.Artifact.response.code.ValidationMessage.PASSWORD_CHECK_INVALID;
+import static kr.adapterz.Artifact.response.code.ValidationMessage.PASSWORD_CHECK_NOT_SAME;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+
+/**
+ * [참고 답안 보관본]
+ * UserService의 비즈니스 규칙만 검증하는 단위 테스트입니다.
+ *
+ * Spring 서버와 실제 DB는 실행하지 않습니다. 서비스가 의존하는 UserRepository만
+ * Mock으로 교체하여, 저장소의 결과에 따라 서비스가 올바르게 판단하는지 확인합니다.
+ */
+@ExtendWith(MockitoExtension.class)
+@DisplayName("UserService 단위 테스트")
+class UserServiceTest {
+
+    private static final String EMAIL_VALUE = "user@test.com";
+    private static final String PASSWORD = "Password1!";
+    private static final String NICKNAME_VALUE = "테스터";
+
+    // 중요: DB까지 테스트하지 않도록 Repository의 가짜 객체를 만듭니다.
+    @Mock
+    private UserRepository userRepository;
+
+    // 중요: 위 Mock Repository를 생성자로 주입한 실제 UserService가 테스트 대상입니다.
+    @InjectMocks
+    private UserService userService;
+
+    @Nested
+    @DisplayName("회원가입")
+    class Signup {
+
+        @Test
+        @DisplayName("중복과 비밀번호 확인에 문제가 없으면 회원을 저장한다")
+        void signupSuccess() {
+            // given: 요청값과 저장소가 반환할 결과를 준비합니다.
+            UserSignupRequestDto request = signupRequest();
+            given(userRepository.existsByEmailIgnoreCase(EMAIL_VALUE)).willReturn(false);
+            given(userRepository.existsByNickname(NICKNAME_VALUE)).willReturn(false);
+            given(userRepository.save(any(User.class)))
+                    .willAnswer(invocation -> invocation.getArgument(0));
+
+            // when: 테스트하려는 서비스 메서드는 한 번만 실행합니다.
+            User result = userService.signup(request);
+
+            // then: 반환값과 Repository와의 상호작용을 함께 확인합니다.
+            assertThat(result.getEmail()).isEqualTo(EMAIL_VALUE);
+            assertThat(result.getNickname()).isEqualTo(NICKNAME_VALUE);
+            assertThat(result.matchesPassword(PASSWORD)).isTrue();
+            then(userRepository).should().save(any(User.class));
+        }
+
+        @Test
+        @DisplayName("이메일이 중복되면 예외를 발생시키고 회원을 저장하지 않는다")
+        void signupFailsWhenEmailIsDuplicated() {
+            // 이메일 검사에서 바로 중단되므로 이 테스트에 필요한 getter만 설정합니다.
+            UserSignupRequestDto request = mock(UserSignupRequestDto.class);
+            given(request.getEmail()).willReturn(EMAIL_VALUE);
+            given(userRepository.existsByEmailIgnoreCase(EMAIL_VALUE)).willReturn(true);
+
+            assertThatThrownBy(() -> userService.signup(request))
+                    .isInstanceOfSatisfying(InvalidInputException.class, exception -> {
+                        assertThat(exception.getErrors()).hasSize(1);
+                        assertThat(exception.getErrors().get(0).getField()).isEqualTo(EMAIL);
+                        assertThat(exception.getErrors().get(0).getReason()).isEqualTo(EMAIL_DUPLICATE);
+                    });
+
+            // 중요: 검증 실패 후에는 다음 검사나 저장이 실행되면 안 됩니다.
+            then(userRepository).should(never()).existsByNickname(any());
+            then(userRepository).should(never()).save(any(User.class));
+        }
+
+        @Test
+        @DisplayName("닉네임이 중복되면 예외를 발생시키고 회원을 저장하지 않는다")
+        void signupFailsWhenNicknameIsDuplicated() {
+            UserSignupRequestDto request = mock(UserSignupRequestDto.class);
+            given(request.getEmail()).willReturn(EMAIL_VALUE);
+            given(request.getNickname()).willReturn(NICKNAME_VALUE);
+            given(userRepository.existsByEmailIgnoreCase(EMAIL_VALUE)).willReturn(false);
+            given(userRepository.existsByNickname(NICKNAME_VALUE)).willReturn(true);
+
+            assertThatThrownBy(() -> userService.signup(request))
+                    .isInstanceOfSatisfying(InvalidInputException.class, exception -> {
+                        assertThat(exception.getErrors().get(0).getField()).isEqualTo(NICKNAME);
+                        assertThat(exception.getErrors().get(0).getReason()).isEqualTo(NICKNAME_DUPLICATE);
+                    });
+
+            then(userRepository).should(never()).save(any(User.class));
+        }
+
+        @Test
+        @DisplayName("비밀번호 확인이 일치하지 않으면 회원을 저장하지 않는다")
+        void signupFailsWhenPasswordCheckDoesNotMatch() {
+            UserSignupRequestDto request = mock(UserSignupRequestDto.class);
+            given(request.getEmail()).willReturn(EMAIL_VALUE);
+            given(request.getNickname()).willReturn(NICKNAME_VALUE);
+            given(request.getPassword()).willReturn(PASSWORD);
+            given(request.getPasswordCheck()).willReturn("Different1!");
+
+            assertThatThrownBy(() -> userService.signup(request))
+                    .isInstanceOfSatisfying(InvalidInputException.class, exception -> {
+                        assertThat(exception.getErrors().get(0).getField()).isEqualTo(PASSWORD_CHECK);
+                        assertThat(exception.getErrors().get(0).getReason()).isEqualTo(PASSWORD_CHECK_INVALID);
+                    });
+
+            then(userRepository).should(never()).save(any(User.class));
+        }
+    }
+
+    @Nested
+    @DisplayName("사용자 조회와 표시 이름")
+    class FindUser {
+
+        @Test
+        @DisplayName("ID에 해당하는 사용자가 있으면 반환한다")
+        void findByIdSuccess() {
+            User user = user();
+            given(userRepository.findById(1L)).willReturn(Optional.of(user));
+
+            User result = userService.findById(1L);
+
+            assertThat(result).isSameAs(user);
+        }
+
+        @Test
+        @DisplayName("ID에 해당하는 사용자가 없으면 USER_NOT_FOUND 예외를 발생시킨다")
+        void findByIdFailsWhenUserDoesNotExist() {
+            given(userRepository.findById(1L)).willReturn(Optional.empty());
+
+            assertThatThrownBy(() -> userService.findById(1L))
+                    .isInstanceOfSatisfying(NotFoundException.class,
+                            exception -> assertThat(exception.getErrorCode()).isEqualTo(USER_NOT_FOUND));
+        }
+
+        @Test
+        @DisplayName("여러 사용자 ID를 닉네임 Map으로 변환하고 탈퇴 회원은 알 수 없음으로 표시한다")
+        void findNicknameMapByIds() {
+            User activeUser = user(1L, "활동회원");
+            User deletedUser = user(2L, "탈퇴회원");
+            deletedUser.softDelete();
+            Set<Long> userIds = Set.of(1L, 2L);
+            given(userRepository.findAllById(userIds)).willReturn(List.of(activeUser, deletedUser));
+
+            Map<Long, String> result = userService.findNicknameMapByIds(userIds);
+
+            assertThat(result)
+                    .containsEntry(1L, "활동회원")
+                    .containsEntry(2L, UserService.DELETED_USER_NICKNAME);
+        }
+
+        @Test
+        @DisplayName("정상 회원은 원래 닉네임을 표시한다")
+        void getDisplayNicknameForActiveUser() {
+            assertThat(userService.getDisplayNickname(user())).isEqualTo(NICKNAME_VALUE);
+        }
+
+        @Test
+        @DisplayName("탈퇴 회원은 알 수 없음으로 표시한다")
+        void getDisplayNicknameForDeletedUser() {
+            User user = user();
+            user.softDelete();
+
+            // 먼저 테스트 데이터가 의도한 탈퇴 상태인지 확인합니다.
+            assertThat(user.isDeleted()).isTrue();
+            assertThat(userService.getDisplayNickname(user))
+                    .isEqualTo(UserService.DELETED_USER_NICKNAME);
+        }
+
+        @Test
+        @DisplayName("ID로 탈퇴 회원을 조회하면 알 수 없음으로 표시한다")
+        void findDisplayNicknameByIdForDeletedUser() {
+            User user = user();
+            user.softDelete();
+            given(userRepository.findById(1L)).willReturn(Optional.of(user));
+
+            String result = userService.findDisplayNicknameById(1L);
+
+            assertThat(result).isEqualTo(UserService.DELETED_USER_NICKNAME);
+            then(userRepository).should().findById(1L);
+        }
+    }
+
+    @Nested
+    @DisplayName("인증 사용자 확인")
+    class RequireAuthenticated {
+
+        @Test
+        @DisplayName("사용자 ID가 null이면 인증에 실패한다")
+        void failsWhenUserIdIsNull() {
+            assertThatThrownBy(() -> userService.requireAuthenticated(null))
+                    .isInstanceOfSatisfying(AuthenticationException.class,
+                            exception -> assertThat(exception.getErrorCode()).isEqualTo(UNAUTHORIZED));
+
+            // null은 저장소에 조회할 필요도 없습니다.
+            then(userRepository).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("저장소에 사용자가 없으면 인증에 실패한다")
+        void failsWhenUserDoesNotExist() {
+            given(userRepository.findById(1L)).willReturn(Optional.empty());
+
+            assertThatThrownBy(() -> userService.requireAuthenticated(1L))
+                    .isInstanceOfSatisfying(AuthenticationException.class,
+                            exception -> assertThat(exception.getErrorCode()).isEqualTo(UNAUTHORIZED));
+        }
+
+        @Test
+        @DisplayName("탈퇴한 사용자는 인증에 실패한다")
+        void failsWhenUserIsDeleted() {
+            User user = user();
+            user.softDelete();
+            given(userRepository.findById(1L)).willReturn(Optional.of(user));
+
+            assertThatThrownBy(() -> userService.requireAuthenticated(1L))
+                    .isInstanceOfSatisfying(AuthenticationException.class,
+                            exception -> assertThat(exception.getErrorCode()).isEqualTo(UNAUTHORIZED));
+        }
+
+        @Test
+        @DisplayName("존재하는 정상 회원이면 인증된 사용자를 반환한다")
+        void success() {
+            User user = user();
+            given(userRepository.findById(1L)).willReturn(Optional.of(user));
+
+            assertThat(userService.requireAuthenticated(1L)).isSameAs(user);
+        }
+    }
+
+    @Nested
+    @DisplayName("로그인")
+    class Login {
+
+        @Test
+        @DisplayName("이메일과 비밀번호가 일치하는 정상 회원이면 로그인에 성공한다")
+        void loginSuccess() {
+            User user = user();
+            given(userRepository.findByEmailIgnoreCase(EMAIL_VALUE)).willReturn(Optional.of(user));
+
+            User result = userService.login(EMAIL_VALUE, PASSWORD);
+
+            assertThat(result).isSameAs(user);
+        }
+
+        @Test
+        @DisplayName("이메일에 해당하는 회원이 없으면 로그인에 실패한다")
+        void loginFailsWhenEmailDoesNotExist() {
+            given(userRepository.findByEmailIgnoreCase(EMAIL_VALUE)).willReturn(Optional.empty());
+
+            assertLoginFailure(() -> userService.login(EMAIL_VALUE, PASSWORD));
+        }
+
+        @Test
+        @DisplayName("비밀번호가 일치하지 않으면 로그인에 실패한다")
+        void loginFailsWhenPasswordDoesNotMatch() {
+            given(userRepository.findByEmailIgnoreCase(EMAIL_VALUE)).willReturn(Optional.of(user()));
+
+            assertLoginFailure(() -> userService.login(EMAIL_VALUE, "WrongPassword1!"));
+        }
+
+        @Test
+        @DisplayName("탈퇴한 회원이면 로그인에 실패한다")
+        void loginFailsWhenUserIsDeleted() {
+            User user = user();
+            user.softDelete();
+            given(userRepository.findByEmailIgnoreCase(EMAIL_VALUE)).willReturn(Optional.of(user));
+
+            assertLoginFailure(() -> userService.login(EMAIL_VALUE, PASSWORD));
+        }
+    }
+
+    @Nested
+    @DisplayName("회원정보 변경과 탈퇴")
+    class ChangeUser {
+
+        @Test
+        @DisplayName("중복되지 않은 닉네임과 프로필 이미지로 변경한다")
+        void updateProfileSuccess() {
+            User user = user();
+            UserProfileUpdateRequestDto request = mock(UserProfileUpdateRequestDto.class);
+            given(request.getNickname()).willReturn("새닉네임");
+            given(request.getProfileImage()).willReturn("new-image.png");
+            given(userRepository.findById(1L)).willReturn(Optional.of(user));
+            given(userRepository.existsByNicknameAndIdNot("새닉네임", 1L)).willReturn(false);
+
+            User result = userService.updateProfile(1L, request);
+
+            // 중요: JPA Dirty Checking 대상인 실제 엔티티의 상태 변경을 검증합니다.
+            assertThat(result).isSameAs(user);
+            assertThat(user.getNickname()).isEqualTo("새닉네임");
+            assertThat(user.getProfileImage()).isEqualTo("new-image.png");
+            then(userRepository).should(never()).save(any(User.class));
+        }
+
+        @Test
+        @DisplayName("다른 회원이 사용 중인 닉네임이면 프로필을 변경하지 않는다")
+        void updateProfileFailsWhenNicknameIsDuplicated() {
+            User user = user();
+            UserProfileUpdateRequestDto request = mock(UserProfileUpdateRequestDto.class);
+            given(request.getNickname()).willReturn("중복닉네임");
+            given(userRepository.findById(1L)).willReturn(Optional.of(user));
+            given(userRepository.existsByNicknameAndIdNot("중복닉네임", 1L)).willReturn(true);
+
+            assertThatThrownBy(() -> userService.updateProfile(1L, request))
+                    .isInstanceOfSatisfying(InvalidInputException.class, exception -> {
+                        assertThat(exception.getErrors().get(0).getField()).isEqualTo(NICKNAME);
+                        assertThat(exception.getErrors().get(0).getReason()).isEqualTo(NICKNAME_DUPLICATE);
+                    });
+
+            assertThat(user.getNickname()).isEqualTo(NICKNAME_VALUE);
+        }
+
+        @Test
+        @DisplayName("새 비밀번호와 확인값이 같으면 비밀번호를 변경한다")
+        void updatePasswordSuccess() {
+            User user = user();
+            PasswordUpdateRequestDto request = mock(PasswordUpdateRequestDto.class);
+            given(request.getPassword()).willReturn("NewPassword1!");
+            given(request.getPasswordCheck()).willReturn("NewPassword1!");
+            given(userRepository.findById(1L)).willReturn(Optional.of(user));
+
+            userService.updatePassword(1L, request);
+
+            assertThat(user.matchesPassword("NewPassword1!")).isTrue();
+        }
+
+        @Test
+        @DisplayName("새 비밀번호와 확인값이 다르면 기존 비밀번호를 유지한다")
+        void updatePasswordFailsWhenPasswordCheckDoesNotMatch() {
+            User user = user();
+            PasswordUpdateRequestDto request = mock(PasswordUpdateRequestDto.class);
+            given(request.getPassword()).willReturn("NewPassword1!");
+            given(request.getPasswordCheck()).willReturn("Different1!");
+            given(userRepository.findById(1L)).willReturn(Optional.of(user));
+
+            assertThatThrownBy(() -> userService.updatePassword(1L, request))
+                    .isInstanceOfSatisfying(InvalidInputException.class, exception -> {
+                        assertThat(exception.getErrors().get(0).getField()).isEqualTo(PASSWORD_CHECK);
+                        assertThat(exception.getErrors().get(0).getReason()).isEqualTo(PASSWORD_CHECK_NOT_SAME);
+                    });
+
+            assertThat(user.matchesPassword(PASSWORD)).isTrue();
+        }
+
+        @Test
+        @DisplayName("회원 탈퇴 시 row를 삭제하지 않고 탈퇴 상태로 변경한다")
+        void deleteUsesSoftDelete() {
+            User user = user();
+            given(userRepository.findById(1L)).willReturn(Optional.of(user));
+
+            userService.delete(1L);
+
+            assertThat(user.isDeleted()).isTrue();
+            // 중요: 소프트 삭제이므로 Repository.delete를 호출하지 않습니다.
+            then(userRepository).should(never()).delete(any(User.class));
+        }
+    }
+
+    /** 현재 요청 DTO에는 값 생성자가 없으므로 DTO getter만 Mock으로 준비합니다. */
+    private UserSignupRequestDto signupRequest() {
+        UserSignupRequestDto request = mock(UserSignupRequestDto.class);
+        given(request.getEmail()).willReturn(EMAIL_VALUE);
+        given(request.getPassword()).willReturn(PASSWORD);
+        given(request.getPasswordCheck()).willReturn(PASSWORD);
+        given(request.getNickname()).willReturn(NICKNAME_VALUE);
+        given(request.getProfileImage()).willReturn("profile.png");
+        return request;
+    }
+
+    private User user() {
+        return new User(EMAIL_VALUE, PASSWORD, NICKNAME_VALUE, "profile.png");
+    }
+
+    /** DB가 부여하는 ID를 Repository 없이 표현하기 위한 테스트 전용 보조 메서드입니다. */
+    private User user(Long id, String nickname) {
+        User user = new User(id + "@test.com", PASSWORD, nickname, null);
+        ReflectionTestUtils.setField(user, "id", id);
+        return user;
+    }
+
+    private void assertLoginFailure(org.assertj.core.api.ThrowableAssert.ThrowingCallable action) {
+        assertThatThrownBy(action)
+                .isInstanceOfSatisfying(AuthenticationException.class,
+                        exception -> assertThat(exception.getErrorCode()).isEqualTo(EMAIL_PASSWORD_CHECK));
+    }
+}
