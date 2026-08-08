@@ -1,0 +1,129 @@
+name: Backend CI
+
+# 중요: main 대상 PR과 main 반영 시 동일한 검증을 수행합니다.
+# workflow_dispatch는 GitHub Actions 화면에서 필요할 때 수동 실행하는 기능입니다.
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# CI는 저장소 내용을 읽고 테스트만 수행하므로 쓰기 권한을 주지 않습니다.
+permissions:
+  contents: read
+
+# 같은 브랜치에 새 커밋이 올라오면 이전의 오래된 CI 실행을 취소합니다.
+concurrency:
+  group: backend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  h2-tests:
+    name: H2 tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Grant execute permission to Gradle Wrapper
+        run: chmod +x gradlew
+
+      # 기존 @ActiveProfiles("h2") 테스트와 Service/Controller 단위 테스트를 모두 실행합니다.
+      - name: Run tests
+        run: ./gradlew test --no-daemon
+
+  mysql-startup:
+    name: MySQL, Flyway and Spring Boot startup
+    needs: h2-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # GitHub Runner 전용 임시 MySQL입니다. 운영 EC2 DB와 연결되지 않습니다.
+    services:
+      mysql:
+        image: mysql:8.4.10
+        env:
+          MYSQL_DATABASE: never_enough
+          MYSQL_USER: never_enough_app
+          MYSQL_PASSWORD: ci_mysql_password
+          MYSQL_ROOT_PASSWORD: ci_root_password
+          TZ: Asia/Seoul
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci_root_password --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+          --health-start-period=30s
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Grant execute permission to Gradle Wrapper
+        run: chmod +x gradlew
+
+      # 애플리케이션이 MySQL에 연결되고 Flyway V1/V2와 Hibernate validate를 통과해야
+      # /actuator/health가 {"status":"UP"}을 반환합니다.
+      - name: Verify MySQL startup and health
+        env:
+          SPRING_PROFILES_ACTIVE: mysql
+          MYSQL_DATASOURCE_URL: "jdbc:mysql://127.0.0.1:3306/never_enough?serverTimezone=Asia/Seoul&characterEncoding=UTF-8"
+          MYSQL_DATASOURCE_USERNAME: never_enough_app
+          MYSQL_DATASOURCE_PASSWORD: ci_mysql_password
+          JWT_SECRET: ci-only-jwt-secret-key-at-least-32-bytes
+          PASSWORD_MIGRATION_ENABLED: "false"
+          APP_UPLOAD_DIRECTORY: ${{ runner.temp }}/uploads
+          APP_RECOVERY_DIRECTORY: ${{ runner.temp }}/recovery
+          SPRING_JPA_SHOW_SQL: "false"
+        run: |
+          LOG_FILE="$RUNNER_TEMP/backend-mysql.log"
+          HEALTH_FILE="$RUNNER_TEMP/backend-health.json"
+
+          ./gradlew bootRun --no-daemon >"$LOG_FILE" 2>&1 &
+          BACKEND_PID=$!
+
+          cleanup() {
+            kill "$BACKEND_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          for attempt in $(seq 1 60); do
+            if curl --silent --show-error --fail \
+              http://127.0.0.1:8080/actuator/health \
+              >"$HEALTH_FILE"; then
+              cat "$HEALTH_FILE"
+              grep -q '"status":"UP"' "$HEALTH_FILE"
+              exit 0
+            fi
+
+            if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+              break
+            fi
+
+            sleep 2
+          done
+
+          echo "Spring Boot did not become healthy."
+          cat "$LOG_FILE"
+          exit 1
