@@ -20,6 +20,8 @@ repositories {
 dependencies {
 	//H2 DB 연결 - 미니 퀘스트 -> 1단계: 의존성 추가
 	implementation 'org.springframework.boot:spring-boot-starter-web'
+	// Docker Compose가 DB 연결까지 완료된 애플리케이션 상태를 확인하는 health endpoint입니다.
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 
 	//implementation 'org.springframework.boot:spring-boot-starter-jdbc' // 선택: 코드로 쿼리 테스트 시 권장
 	// JPA Repository와 Entity 매핑은 기존처럼 Hibernate가 담당합니다.
