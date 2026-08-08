@@ -73,6 +73,8 @@ public class SecurityConfig {
                                 "/users/login",
                                 "/users/recovery"
                         ).permitAll()
+                        // Docker 내부 health check가 인증 토큰 없이 기동 상태를 확인합니다.
+                        .requestMatchers("/actuator/health").permitAll()
                         // 게시글과 댓글에서 프로필 이미지를 보여줄 수 있도록 업로드 파일 조회를 공개합니다.
                         .requestMatchers("/uploads/**").permitAll()
                         .anyRequest().authenticated()
