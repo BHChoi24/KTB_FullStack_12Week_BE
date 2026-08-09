@@ -13,6 +13,7 @@ import kr.adapterz.Artifact.exception.InvalidInputException;
 import kr.adapterz.Artifact.exception.InvalidPageException;
 import kr.adapterz.Artifact.exception.NotFoundException;
 import kr.adapterz.Artifact.repository.CommentRepository;
+import kr.adapterz.Artifact.repository.PostFullTextRepository;
 import kr.adapterz.Artifact.repository.PostLikeRepository;
 import kr.adapterz.Artifact.repository.PostRepository;
 import kr.adapterz.Artifact.repository.PostSpecifications;
@@ -42,6 +43,7 @@ import static kr.adapterz.Artifact.response.code.ValidationMessage.TITLE_EMPTY;
 @Transactional(readOnly = true)
 public class PostService {
     private final PostRepository postRepository;
+    private final PostFullTextRepository postFullTextRepository;
     private final CommentRepository commentRepository;
     private final PostLikeRepository postLikeRepository;
     private final UserService userService;
@@ -49,12 +51,14 @@ public class PostService {
 
     public PostService(
             PostRepository postRepository,
+            PostFullTextRepository postFullTextRepository,
             CommentRepository commentRepository,
             PostLikeRepository postLikeRepository,
             UserService userService,
             PostImageStorageService postImageStorageService
     ) {
         this.postRepository = postRepository;
+        this.postFullTextRepository = postFullTextRepository;
         this.commentRepository = commentRepository;
         this.postLikeRepository = postLikeRepository;
         this.userService = userService;
@@ -103,12 +107,16 @@ public class PostService {
                 .orElseThrow(() -> new NotFoundException(POSTS_NOT_FOUND));
     }
 
-    //페이지 찾기
+    // 검색어 유무에 따라 FULLTEXT 또는 기존 목록 조회를 선택한다.
     public Page<Post> findPage(int page, int size, PostSearchCondition condition) {
         // 페이지 번호는 1부터 시작합니다.
         if (page < 1) throw new InvalidPageException();
 
         PageRequest pageable = PageRequest.of(page - 1, size, createSort(condition.sort()));
+        if (condition.hasFullTextQuery()) {
+            // 검색어가 있으면 MySQL FULLTEXT 조회를 사용한다.
+            return postFullTextRepository.search(condition, pageable);
+        }
         // 상단 고정 영역은 바로가기이므로 일반 목록에서는 pinned 여부와 관계없이 조건에 맞는 글을 조회합니다.
         Page<Post> postPage = postRepository.findAll(
                 PostSpecifications.matches(condition),

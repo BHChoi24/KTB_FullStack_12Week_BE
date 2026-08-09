@@ -4,6 +4,7 @@ import kr.adapterz.Artifact.entity.Post;
 import kr.adapterz.Artifact.entity.PostPeriod;
 import kr.adapterz.Artifact.entity.PostSort;
 import kr.adapterz.Artifact.repository.CommentRepository;
+import kr.adapterz.Artifact.repository.PostFullTextRepository;
 import kr.adapterz.Artifact.repository.PostLikeRepository;
 import kr.adapterz.Artifact.repository.PostRepository;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -26,10 +27,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 
 @ExtendWith(MockitoExtension.class)
 class PostServiceSearchTest {
     @Mock private PostRepository postRepository;
+    @Mock private PostFullTextRepository postFullTextRepository;
     @Mock private CommentRepository commentRepository;
     @Mock private PostLikeRepository postLikeRepository;
     @Mock private UserService userService;
@@ -65,6 +68,27 @@ class PostServiceSearchTest {
         List<Sort.Order> orders = pageableCaptor.getValue().getSort().stream().toList();
         assertEquals(expectedProperties, orders.stream().map(Sort.Order::getProperty).toList());
         assertEquals(expectedDirections, orders.stream().map(Sort.Order::getDirection).toList());
+    }
+
+    @org.junit.jupiter.api.Test
+    void 검색어가_있으면_FULLTEXT_저장소를_사용한다() {
+        PostSearchCondition condition = PostSearchCondition.of(
+                null,
+                "검색 기능",
+                PostPeriod.ALL,
+                PostSort.LATEST,
+                PostPeriodRange.all()
+        );
+        given(postFullTextRepository.search(any(PostSearchCondition.class), any(Pageable.class)))
+                .willReturn(Page.empty());
+
+        postService.findPage(1, 10, condition);
+
+        verify(postFullTextRepository).search(org.mockito.ArgumentMatchers.eq(condition), any(Pageable.class));
+        verify(postRepository, never()).findAll(
+                org.mockito.ArgumentMatchers.<Specification<Post>>any(),
+                any(Pageable.class)
+        );
     }
 
     private static Stream<Arguments> sortCases() {

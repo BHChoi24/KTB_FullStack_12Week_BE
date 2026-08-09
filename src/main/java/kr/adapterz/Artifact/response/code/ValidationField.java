@@ -12,6 +12,7 @@ public final class ValidationField {
     public static final String POST_IMAGE = "post_image";
     public static final String CATEGORY = "category";
     public static final String PINNED = "pinned";
+    public static final String KEYWORD = "keyword";
 
     private ValidationField() {
     }

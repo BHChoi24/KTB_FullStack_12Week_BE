@@ -25,6 +25,7 @@ public final class ValidationMessage {
     public static final String CATEGORY_EMPTY = "category_empty";
     public static final String PINNED_NOTICE_ONLY = "pinned_notice_only";
     public static final String PINNED_LIMIT_EXCEEDED = "pinned_limit_exceeded";
+    public static final String KEYWORD_TOO_SHORT = "검색 가능한 단어는 2글자 이상 입력해야 합니다.";
 
     private ValidationMessage() {
     }

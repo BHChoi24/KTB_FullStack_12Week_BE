@@ -54,32 +54,6 @@ class PostRepositorySearchTest {
         assertTrue(notices.stream().anyMatch(Post::isPinned));
     }
 
-    @Test
-    void 제목은_대소문자를_무시해_시작부분만_검색한다() {
-        postRepository.saveAllAndFlush(List.of(
-                post("MUSIC 추천", PostCategory.MUSIC_RECOMMENDATION),
-                post("오늘의 music", PostCategory.MUSIC_RECOMMENDATION)
-        ));
-
-        List<Post> result = search(condition(null, "music"));
-
-        assertEquals(1, result.size());
-        assertEquals("MUSIC 추천", result.getFirst().getTitle());
-    }
-
-    @Test
-    void 검색어의_like_문자는_와일드카드가_아닌_일반문자로_검색한다() {
-        postRepository.saveAllAndFlush(List.of(
-                post("100% 음악", PostCategory.MUSIC_RECOMMENDATION),
-                post("100곡 음악", PostCategory.MUSIC_RECOMMENDATION)
-        ));
-
-        List<Post> result = search(condition(null, "100%"));
-
-        assertEquals(1, result.size());
-        assertEquals("100% 음악", result.getFirst().getTitle());
-    }
-
     private Post post(String title, PostCategory category) {
         return new Post(author, title, "내용", null, category);
     }

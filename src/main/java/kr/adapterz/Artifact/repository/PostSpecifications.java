@@ -4,36 +4,28 @@ import kr.adapterz.Artifact.entity.Post;
 import kr.adapterz.Artifact.service.PostSearchCondition;
 import org.springframework.data.jpa.domain.Specification;
 
-import java.util.Locale;
-
-/** 선택된 게시글 조회 조건만 조립하여 조건 조합별 Repository 메서드 증가를 막습니다. */
+/** 카테고리와 기간 조건을 조합합니다. */
 public final class PostSpecifications {
-    private static final char LIKE_ESCAPE = '\\';
-
     private PostSpecifications() {
     }
 
+    /** 검색어가 없는 목록의 카테고리와 기간 조건을 조합한다. */
     public static Specification<Post> matches(PostSearchCondition condition) {
         return hasCategory(condition)
-                .and(titleStartsWith(condition))
                 .and(createdInRange(condition));
     }
 
+    /** 카테고리가 선택된 경우에만 일치 조건을 추가한다. */
     private static Specification<Post> hasCategory(PostSearchCondition condition) {
-        return (root, query, builder) -> condition.category() == null
-                ? builder.conjunction()
-                : builder.equal(root.get("category"), condition.category());
-    }
-
-    private static Specification<Post> titleStartsWith(PostSearchCondition condition) {
         return (root, query, builder) -> {
-            if (condition.keyword() == null) return builder.conjunction();
-
-            String pattern = escapeLike(condition.keyword().toLowerCase(Locale.ROOT)) + "%";
-            return builder.like(builder.lower(root.get("title")), pattern, LIKE_ESCAPE);
+            if (condition.category() == null) {
+                return builder.conjunction();
+            }
+            return builder.equal(root.get("category"), condition.category());
         };
     }
 
+    /** 기간이 선택된 경우에만 시작·종료 시각 조건을 추가한다. */
     private static Specification<Post> createdInRange(PostSearchCondition condition) {
         return (root, query, builder) -> {
             if (condition.startAt() == null || condition.endAt() == null) {
@@ -46,10 +38,4 @@ public final class PostSpecifications {
         };
     }
 
-    private static String escapeLike(String value) {
-        return value
-                .replace("\\", "\\\\")
-                .replace("%", "\\%")
-                .replace("_", "\\_");
-    }
 }
